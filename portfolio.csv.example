@@ -1,0 +1,14 @@
+# Portfolio Configuration Example
+# 
+# You can save your portfolio here and load it into the agent.
+# Format: ticker,shares,purchase_price
+#
+# Example:
+# AAPL,10,150.00
+# MSFT,5,300.00
+# GOOGL,3,140.50
+# TSLA,2,240.00
+#
+# Lines starting with # are comments and will be ignored
+
+# Add your stocks below:
