@@ -258,4 +258,101 @@ class InvestmentPlugin(Plugin):
         else:
             output += "✅ No immediate sell recommendations.\n"
         
-        return output
+        return output    
+    async def execute_task_direct(self, task: str) -> str:
+        """
+        Execute task using direct tool calling, bypassing the agent framework.
+        
+        This is a workaround for framework limitations with async tool results.
+        Directly invokes plugin methods to generate a complete investment report.
+        
+        Args:
+            task: Task description containing portfolio information
+            
+        Returns:
+            Complete investment report as markdown string
+        """
+        logger.info("Executing investment analysis using direct tool calling...")
+        
+        import re
+        from datetime import datetime
+        
+        report_parts = []
+        report_parts.append("# Investment Portfolio Analysis Report\n")
+        report_parts.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
+        
+        try:
+            # Parse task to extract portfolio information
+            # Pattern: "23 Tesla (TSLA) shares @ €187.60 ($218.55)"
+            stock_pattern = r'(\d+)\s+([A-Za-z\s]+)\s+\(([A-Z]+)\)\s+shares?\s+@\s+€[\d.]+\s+\(\$([\d.]+)\)'
+            matches = re.findall(stock_pattern, task)
+            
+            if not matches:
+                # Fallback: try EUR-only pattern
+                stock_pattern_eur = r'(\d+)\s+([A-Za-z\s]+)\s+\(([A-Z]+)\)\s+shares?\s+@\s+€([\d.]+)'
+                matches = re.findall(stock_pattern_eur, task)
+                logger.warning("USD prices not found, using EUR prices")
+            
+            # Add stocks to portfolio
+            logger.info("Adding stocks to portfolio...")
+            for shares, company, ticker, price in matches:
+                try:
+                    result = await self._add_to_portfolio(ticker, float(shares), float(price))
+                    logger.info(f"Added {ticker}: {result}")
+                except Exception as e:
+                    logger.warning(f"Failed to add {ticker}: {e}")
+            
+            # Get current portfolio
+            logger.info("Fetching current portfolio...")
+            portfolio_info = await self._get_portfolio()
+            report_parts.append("## Current Portfolio\n\n")
+            report_parts.append(portfolio_info)
+            report_parts.append("\n\n")
+            
+            # Analyze each stock
+            report_parts.append("## Individual Stock Analysis\n\n")
+            for _, _, ticker, _ in matches:
+                try:
+                    logger.info(f"Analyzing {ticker}...")
+                    analysis = await self._analyze_stock(ticker)
+                    report_parts.append(analysis)
+                    report_parts.append("\n\n")
+                except Exception as e:
+                    logger.warning(f"Failed to analyze {ticker}: {e}")
+            
+            # Get sell recommendations
+            report_parts.append("## Sell Recommendations\n\n")
+            for _, _, ticker, _ in matches:
+                try:
+                    logger.info(f"Checking sell recommendation for {ticker}...")
+                    sell_rec = await self._should_sell(ticker)
+                    report_parts.append(f"### {ticker}\n{sell_rec}\n\n")
+                except Exception as e:
+                    logger.warning(f"Failed to get sell recommendation for {ticker}: {e}")
+            
+            # Find buy opportunities
+            logger.info("Finding buy opportunities...")
+            try:
+                buy_opps = await self._find_buy_opportunities()
+                report_parts.append("## Buy Opportunities\n\n")
+                report_parts.append(buy_opps)
+                report_parts.append("\n\n")
+            except Exception as e:
+                logger.warning(f"Failed to find buy opportunities: {e}")
+            
+            # Generate overall portfolio report
+            logger.info("Generating portfolio summary...")
+            try:
+                summary = await self._generate_portfolio_report()
+                report_parts.append("## Portfolio Summary\n\n")
+                report_parts.append(summary)
+            except Exception as e:
+                logger.warning(f"Failed to generate portfolio report: {e}")
+            
+            final_report = "".join(report_parts)
+            logger.info(f"Direct execution completed, report length: {len(final_report)} characters")
+            return final_report
+            
+        except Exception as e:
+            logger.error(f"Direct execution failed: {e}", exc_info=True)
+            raise RuntimeError(f"Direct investment execution failed: {e}")
