@@ -124,6 +124,7 @@ class InvestmentPlugin(Plugin):
                 "should_sell": self._should_sell,
                 "find_buy_opportunities": self._find_buy_opportunities,
                 "generate_portfolio_report": self._generate_portfolio_report,
+                "format_portfolio_as_markdown": self._format_portfolio_as_markdown,
             }
 
     async def _add_to_portfolio(self, ticker: str, shares: float, purchase_price: Optional[float] = None):
@@ -173,21 +174,29 @@ class InvestmentPlugin(Plugin):
         
         output += f"**Valuation Metrics:**\n"
         output += f"  • Market Cap: ${result['market_cap']:,.0f}\n"
-        output += f"  • P/E Ratio: {result['pe_ratio']:.2f if result['pe_ratio'] else 'N/A'}\n"
-        output += f"  • Forward P/E: {result['forward_pe']:.2f if result['forward_pe'] else 'N/A'}\n"
-        output += f"  • PEG Ratio: {result['peg_ratio']:.2f if result['peg_ratio'] else 'N/A'}\n"
-        output += f"  • Price/Book: {result['price_to_book']:.2f if result['price_to_book'] else 'N/A'}\n"
+        pe_ratio_str = f"{result['pe_ratio']:.2f}" if result['pe_ratio'] is not None else 'N/A'
+        fwd_pe_str = f"{result['forward_pe']:.2f}" if result['forward_pe'] is not None else 'N/A'
+        peg_ratio_str = f"{result['peg_ratio']:.2f}" if result['peg_ratio'] is not None else 'N/A'
+        ptb_str = f"{result['price_to_book']:.2f}" if result['price_to_book'] is not None else 'N/A'
+        output += f"  • P/E Ratio: {pe_ratio_str}\n"
+        output += f"  • Forward P/E: {fwd_pe_str}\n"
+        output += f"  • PEG Ratio: {peg_ratio_str}\n"
+        output += f"  • Price/Book: {ptb_str}\n"
         output += f"  • Dividend Yield: {result['dividend_yield']:.2f}%\n\n"
         
         output += f"**Technical Indicators:**\n"
-        output += f"  • 50-Day MA: ${result['moving_avg_50d']:.2f if result['moving_avg_50d'] else 'N/A'}\n"
-        output += f"  • 200-Day MA: ${result['moving_avg_200d']:.2f if result['moving_avg_200d'] else 'N/A'}\n"
+        ma_50_str = f"${result['moving_avg_50d']:.2f}" if result['moving_avg_50d'] is not None else 'N/A'
+        ma_200_str = f"${result['moving_avg_200d']:.2f}" if result['moving_avg_200d'] is not None else 'N/A'
+        beta_str = f"{result['beta']:.2f}" if result['beta'] is not None else 'N/A'
+        output += f"  • 50-Day MA: {ma_50_str}\n"
+        output += f"  • 200-Day MA: {ma_200_str}\n"
         output += f"  • Volatility: {result['volatility']:.2f}%\n"
-        output += f"  • Beta: {result['beta']:.2f if result['beta'] else 'N/A'}\n\n"
+        output += f"  • Beta: {beta_str}\n\n"
         
         output += f"**Analyst Data:**\n"
         output += f"  • Recommendation: {result['analyst_recommendation'].upper()}\n"
-        output += f"  • Target Price: ${result['target_price']:.2f if result['target_price'] else 'N/A'}\n"
+        target_price_str = f"${result['target_price']:.2f}" if result['target_price'] is not None else 'N/A'
+        output += f"  • Target Price: {target_price_str}\n"
         
         return output
     
@@ -258,7 +267,140 @@ class InvestmentPlugin(Plugin):
         else:
             output += "✅ No immediate sell recommendations.\n"
         
-        return output    
+        return output
+    
+    async def _format_portfolio_as_markdown(
+        self, 
+        include_buy_opportunities: bool = False, 
+        sectors_for_opportunities: Optional[list] = None
+    ):
+        """Format portfolio data as markdown suitable for PDF generation."""
+        from datetime import datetime
+        
+        # Get portfolio data
+        portfolio = self._investment_service.get_portfolio()
+        if not portfolio:
+            return "Portfolio is empty. Cannot generate report."
+        
+        # Build markdown report
+        markdown = "# Investment Portfolio Report\n\n"
+        markdown += f"*Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}*\n\n"
+        
+        # Calculate totals
+        total_value = sum(h['current_value'] for h in portfolio)
+        total_cost = sum(h['purchase_value'] for h in portfolio)
+        total_pl = total_value - total_cost
+        total_pl_pct = (total_pl / total_cost * 100) if total_cost > 0 else 0
+        
+        # Summary section
+        markdown += "## Portfolio Summary\n\n"
+        markdown += f"- **Total Holdings:** {len(portfolio)} stocks\n"
+        markdown += f"- **Total Investment:** ${total_cost:,.2f}\n"
+        markdown += f"- **Current Value:** ${total_value:,.2f}\n"
+        markdown += f"- **Total Profit/Loss:** ${total_pl:,.2f} ({total_pl_pct:+.2f}%)\n\n"
+        
+        # Holdings section (as list instead of table for PDF compatibility)
+        markdown += "## Current Holdings\n\n"
+        
+        for h in portfolio:
+            markdown += f"### {h['ticker']} - {h['company_name']}\n\n"
+            markdown += f"- Shares: **{h['shares']}**\n"
+            markdown += f"- Purchase Price: **${h['purchase_price']:.2f}**\n"
+            markdown += f"- Current Price: **${h['current_price']:.2f}**\n"
+            markdown += f"- Current Value: **${h['current_value']:,.2f}**\n"
+            markdown += f"- Profit/Loss: **${h['profit_loss']:,.2f}** ({h['profit_loss_pct']:+.2f}%)\n"
+            markdown += "\n"
+        
+        # Sell recommendations
+        markdown += "## ⚠️ Sell Recommendations\n\n"
+        has_sell_recs = False
+        
+        for holding in portfolio:
+            try:
+                sell_analysis = self._investment_service.should_sell(holding['ticker'])
+                if sell_analysis['sell_score'] >= 6:  # Only include high-confidence sells
+                    has_sell_recs = True
+                    markdown += f"### {sell_analysis['ticker']} - {sell_analysis['recommendation']}\n\n"
+                    markdown += f"**Sell Score:** {sell_analysis['sell_score']}/10\n\n"
+                    markdown += "**Reasons:**\n"
+                    for reason in sell_analysis['reasons']:
+                        markdown += f"- {reason}\n"
+                    markdown += "\n"
+            except Exception as e:
+                # Skip stocks that can't be analyzed (e.g., delisted)
+                logger.warning(f"Skipping sell analysis for {holding['ticker']}: {e}")
+                continue
+        
+        if not has_sell_recs:
+            markdown += "*No immediate sell recommendations at this time.*\n\n"
+        
+        # Buy opportunities (optional)
+        if include_buy_opportunities:
+            opportunities = self._investment_service.find_buy_opportunities(
+                sectors=sectors_for_opportunities,
+                limit=5
+            )
+            
+            if opportunities:
+                markdown += "## 💡 Buy Opportunities\n\n"
+                for opp in opportunities:
+                    markdown += f"### {opp['ticker']} - {opp['company_name']}\n\n"
+                    markdown += f"- **Sector:** {opp['sector']}\n"
+                    markdown += f"- **Current Price:** ${opp['current_price']:.2f}\n"
+                    markdown += f"- **Buy Score:** {opp['buy_score']}/10\n\n"
+                    markdown += "**Reasons:**\n"
+                    for reason in opp['reasons']:
+                        markdown += f"- {reason}\n"
+                    markdown += "\n"
+        
+        return markdown
+    
+    async def _generate_professional_report(self, format: str = "pdf", output_path: Optional[str] = None):
+        """
+        Generate a professional portfolio report using the Reporter agent.
+        
+        Args:
+            format: Output format (pdf, pptx, html, markdown)
+            output_path: Optional custom output path
+            
+        Returns:
+            Result message with file path
+        """
+        # Get portfolio data
+        result = self._investment_service.generate_portfolio_report()
+        
+        if result['status'] == 'empty':
+            return "Cannot create report: Portfolio is empty."
+        
+        # Prepare data for reporter
+        portfolio_data = {
+            "summary": {
+                "total_value": result['total_current_value'],
+                "total_cost": result['total_purchase_value'],
+                "profit_loss": result['total_profit_loss'],
+                "profit_loss_pct": result['total_profit_loss_pct'],
+            },
+            "holdings": result['holdings'],
+            "sell_recommendations": result['sell_recommendations'],
+        }
+        
+        # Try to use reporter agent via hub if available
+        if self._agent and hasattr(self._agent, 'hub'):
+            try:
+                logger.info(f"Calling reporter agent to create {format} report...")
+                reporter_result = await self._agent.hub.call_agent(
+                    "reporter",
+                    action="create_investment_report",
+                    portfolio_data=portfolio_data,
+                    output_format=format,
+                    output_path=output_path,
+                )
+                return f"✅ Professional {format.upper()} report created via Reporter agent:\n{reporter_result}"
+            except Exception as e:
+                logger.warning(f"Could not use reporter agent: {e}")
+                return f"⚠️ Reporter agent not available. Use markdown report:\n{await self._generate_portfolio_report()}"
+        else:
+            return f"⚠️ Hub integration not available. Use markdown report:\n{await self._generate_portfolio_report()}"    
     async def execute_task_direct(self, task: str) -> str:
         """
         Execute task using direct tool calling, bypassing the agent framework.
